@@ -1,4 +1,4 @@
-# jira-integration
+# Jira-Integration
 
 Instructional video on usage:
 https://youtu.be/lb24ohz7yew
