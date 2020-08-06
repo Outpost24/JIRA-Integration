@@ -63,8 +63,8 @@ param (
 Add-Type -AssemblyName System.Web
 
 # Import function definitions
-. ".\OP24-PS-Jira-Interactor.ps1"
-. ".\OP24-PS-Jira-Interactor_v2.ps1"
+. ".\OP24-PS-Jira-Import.ps1"
+. ".\OP24-PS-Jira-Import_2.ps1"
 
 
 # Initialize strings and start logging
