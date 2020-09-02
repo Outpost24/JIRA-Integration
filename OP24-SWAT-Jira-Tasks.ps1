@@ -47,7 +47,7 @@ Intended Use: Intended to be ad-hoc updating and inserting of vulnerabilities in
 #>
 param (
     [Parameter(Mandatory=$True)][string]$jiraUser,
-    [Parameter(Mandatory=$True)][string]$password,
+    [Parameter(Mandatory=$True)][string]$jiraPw,
     [Parameter(Mandatory=$False)][string]$jiraUri = "https://turksmash.atlassian.net/rest/",
     [Parameter(Mandatory=$True)][string]$project,
     [Parameter(Mandatory=$False)][string]$op24user,
@@ -75,7 +75,7 @@ if ($logFile -eq $true) { Start-Transcript -Path "$logname.log" -Force }
 
 
 # Initialize URI for Jira REST API and log in
-$headers = Get-HttpBasicHeader $jiraUser $password
+$headers = Get-HttpBasicHeader $jiraUser $jiraPw
 try {$response=(Invoke-RestMethod -uri ($jiraUri +"api/3/issue/createmeta?expand=projects.issuetypes.fields") -Headers $headers -Method GET) }
 catch {
     write-host "Jira credentials don't work, please try again."
