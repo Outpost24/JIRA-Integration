@@ -44,7 +44,7 @@ function update_issue {
 
     # Define the "Fields" within the issue request
     $fields = @{ 
-            summary = $finding.name;
+            summary = $finding.swatAppName + " : " + $finding.name;
             description = $description
     }
 
@@ -56,8 +56,11 @@ function update_issue {
     $body = ConvertTo-Json $vulnerability -Depth 10
     $body = $body.replace('\\n','\n')
 
+    #write-host "printing update issue for issueID $issueID"
+    #$body
+
     # Execute API command to update issue
-    $issue = (Invoke-RestMethod -uri ($jiraUri +"api/3/issue/" + $issueID) -Headers $headers -Method PUT -ContentType "application/json" -Body $body)
+    $issue = (Invoke-RestMethod -uri ($jiraUri +"api/3/issue/" + $issueID) -Headers $headers -Method PUT -ContentType "application/json; charset=utf-8" -Body $body)
     return $issue
 }
 
@@ -99,10 +102,59 @@ function update_issue_transition {
     $body = ConvertTo-Json $request -Depth 10
     $body = $body.replace('\\n','\n')
 
-    $body
+    #write-host "printing issue transition for issueID $issueID"
+    #$body
 
     $response = (Invoke-RestMethod -uri ($jiraUri +"api/3/issue/$issueID/transitions") -Headers $headers -Method POST -ContentType "application/json" -Body $body)
-    $response
+    write-host $response
+}
+
+# Update a given issue with provided "Label" field
+function add_issue_label {
+    Param
+    (
+         [Parameter(Mandatory=$true, Position=0)]
+         [string] $issueID,
+         [Parameter(Mandatory=$true, Position=1)]
+         [string] $labelToSet
+    )
+
+    # Define a request object
+    $request = New-Object System.Object
+
+    # Create an array to put the labels in
+    $array = @($labelToSet)
+
+    
+    # Write out the whole description from the Finding data
+    $description = ""
+    
+    # Set items to update (null)
+    $update = @{ 
+    }
+
+    # Define the "Fields" within the issue request (null)
+    $fields = @{ labels = $array
+    }
+
+    # Define the transition to set
+    $transition = @{ 
+    }
+
+    # Attach the properties of the finding to our Vulnerability object
+    $request | Add-Member -type NoteProperty -name update -Value $update
+    $request | Add-Member -type NoteProperty -name fields -Value $fields
+    $request | Add-Member -type NoteProperty -name transition -Value $transition
+
+    # Creating an object for the vulnerability to nest into, then convert to JSON
+    $body = ConvertTo-Json $request -Depth 10
+    $body = $body.replace('\\n','\n')
+
+    #write-host "printing add label to issue for issueID $issueID"
+    #$body
+
+    $response = (Invoke-RestMethod -uri ($jiraUri +"api/3/issue/$issueID") -Headers $headers -Method PUT -ContentType "application/json" -Body $body)
+    write-host $response
 }
 
 # Get transition ID for given finding and status to set it to
@@ -117,6 +169,7 @@ function get_transitionID {
 
     # Get all transitions for the issue
     $response=(Invoke-RestMethod -uri ($jiraUri +"api/3/issue/$issueID/transitions") -Headers $headers -Method GET)
+    
     
     # Return the transition for the specified status
     return ($response.transitions | where {$_.name -like $ticketStatus}).id
@@ -149,6 +202,19 @@ function get_existing_findings {
     return $response
 }
 
+function get_existing_finding {
+    Param
+    (
+         [Parameter(Mandatory=$true, Position=0)]
+         [string] $swatID
+    )
+
+    # Get full list of Jira issues for given project
+    $response=(Invoke-RestMethod -uri ($jiraUri +"api/3/search?jql=description%20~%20FindingID%20AND%20text%20~%20`"" + $swatID + '"') -Headers $headers -Method GET)
+    return $response
+}
+
+
 # Function to add a comment into an issue
 #not working atm
 function add_comment {
@@ -170,7 +236,11 @@ function sort_jira_tickets {
     Param
     (
          [Parameter(Mandatory=$true, Position=0)]
-         $jiraTickets
+         $jiraTickets,
+         [Parameter(Mandatory=$true, Position=1)]
+         [string]$findingID,
+         [Parameter(Mandatory=$true, Position=2)]
+         [string]$status
     )
 
 #    $vulnerability | Add-Member -type NoteProperty -name update -Value $update
@@ -180,9 +250,19 @@ function sort_jira_tickets {
     # Basically start with extracting the data for each finding and tracking what finding IDs exist already
     # Need to capture FindingID, fixed status reflected in ticket, current status in Jira, projectID, and issue ID for each issue.
     foreach ($jiraTicket in $jiraTickets) {
+        # Create searchable string to get FindingID data
         $string = $jiraTicket.fields.description.content[0].content[0].text
-        $findingID = $string.Substring($string.IndexOf('[FindingID]')+13, 10)
+
+        # Search string for ID
+        $findingID = $string.Substring($string.IndexOf('[FindingID]:')+13, 9)
+        
+        # Create string for finding status
+        $string = $jiraTicket.fields.description.content[0].content[0].text
+
+        # Find the fixed status
         $currentFixedStatus = $string.Substring($string.IndexOf('[Fixed?]')+10, 5)
+        
+        # Copy in the rest of the data
         $ticketStatus = $jiraTicket.fields.status.name
         $issueID = $jiraTicket.id
         $projectID = $jiraTicket.fields.project.id

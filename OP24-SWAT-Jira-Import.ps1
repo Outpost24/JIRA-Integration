@@ -1,4 +1,4 @@
-﻿# OP24-PS-Jira-Interactor.ps1
+﻿# OP24-SWAT-Jira-Import.ps1
 # *********************************************************************************************************************************************
 # *                                                             General Functions                                                             *
 # *********************************************************************************************************************************************
@@ -64,6 +64,15 @@ function Get-OP24WebFindings ([string]$creds, [string]$uri) {
 }
 
 
+function get_SWAT_URLs ([string]$token, [int]$findingID) {
+    $data = curl -Uri ($uri + '/opi/rest/webfindings/' + $findingID + '/web-information') -Header @{Authorization = "Bearer "+ $token }
+
+    # Convert the data from JSON into powershell object and return it
+    $findingURLs = convertfrom-json $data.content
+    return  $findingURLs
+}
+
+
 # *********************************************************************************************************************************************
 # *                                                          Jira API Functions                                                               *
 # *********************************************************************************************************************************************
@@ -71,7 +80,10 @@ function Get-OP24WebFindings ([string]$creds, [string]$uri) {
 
 # Function to list all of the project that exist
 function enumerate_projects() {
-    $response=(Invoke-RestMethod -uri ($jiraUri +"api/3/project") -Headers $headers -Method GET)   
+    $response=(Invoke-RestMethod -uri ($jiraUri +"api/3/project") -Headers $headers -Method GET)
+    write-host "Command sent: " ($jiraUri +"api/3/project")
+    write-host "Response content: " $response.content
+    write-host "Response: " $response
     return $response
 }
 
@@ -85,7 +97,7 @@ function get_createMeta() {
     return $response.projects
 }
 
-# Function to list all of the issue creation metadata
+# Function to return all of the issue creation metadata for a given issue ID
 function get_issue([int]$issueID) {
     $response=(Invoke-RestMethod -uri ($jiraUri +"api/3/issue/$issueID`?expand=projects.issuetypes.fields") -Headers $headers -Method GET)
     return $response
@@ -165,7 +177,7 @@ function create_basic_issue {
     
     # Define the "Fields" within the issue request
     $fields = @{ 
-            summary = $finding.name;
+            summary = $finding.swatAppName + " : " + $finding.name;
             issuetype = @{id = $issuetypeID};
             description = $description;
             project = @{id = $projectid}
@@ -180,7 +192,6 @@ function create_basic_issue {
     $body = $body.replace('\\n','\n')
 
     # Execute API command to create issue, then return the newly created Issue ID
-    $issue = (Invoke-RestMethod -uri ($jiraUri +"api/3/issue/") -Headers $headers -Method POST -ContentType "application/json" -Body $body).id
+    $issue = (Invoke-RestMethod -uri ($jiraUri +"api/3/issue/") -Headers $headers -Method POST -ContentType "application/json; charset=utf-8" -Body $body).id
     return $issue
 }
-
