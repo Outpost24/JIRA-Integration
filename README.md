@@ -10,7 +10,7 @@ https://youtu.be/lb24ohz7yew
     Inputs: 
               [required fields]:
                 jiraUser   : username for account in JIRA
-                jiraPw     : password for account in JIRA
+                jiraPw     : API Key for account in JIRA (passwords are no longer supported, go to https://id.atlassian.com/manage-profile/security/api-tokens as a a Jira Admin to create)
                 jiraUri    : uri for JIRA instance. 
                    Examples:
                       https://your-domain.atlassian.net/rest/
@@ -25,6 +25,7 @@ https://youtu.be/lb24ohz7yew
                 fileImport : [bool] Flag to enable importing from local CSV file. Default is $False
                 logFile    : [bool] Flag to enable logging and exporting of Findings to CSV file. Default is $False
                 swatApp    : name of SWAT application to filter for
+				code       : MFA Token (SMS or Authenticator)
 
 
-       Usage: OP24-SWAT-Jira-Tasks.ps1 -jiraUri "https://your-domain.atlassian.net/rest/" -jiraUser <youruser> -jiraPw <hidden> -project <yourprojectkey> -op24user <youruser> -op24pw <hidden> -swatApp <appname> -fileImport $fals
+       Usage: OP24-SWAT-Jira-Tasks.ps1 -jiraUri "https://your-domain.atlassian.net/rest/" -jiraUser <youruser> -jiraPw <hidden> -project <yourprojectkey> -op24user <youruser> -op24pw <hidden> -swatApp <appname> -code <MFA token>
