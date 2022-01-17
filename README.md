@@ -24,8 +24,8 @@ https://youtu.be/lb24ohz7yew
               [optional fields]:
                 fileImport : [bool] Flag to enable importing from local CSV file. Default is $False
                 logFile    : [bool] Flag to enable logging and exporting of Findings to CSV file. Default is $False
-                swatApp    : name of SWAT application to filter for
-				code       : MFA Token (SMS or Authenticator)
+                swatApp    : name of SWAT application to filter for 
+                code       : MFA Token (SMS or Authenticator)
 
 
        Usage: OP24-SWAT-Jira-Tasks.ps1 -jiraUri "https://your-domain.atlassian.net/rest/" -jiraUser <youruser> -jiraPw <hidden> -project <yourprojectkey> -op24user <youruser> -op24pw <hidden> -swatApp <appname> -code <MFA token>
