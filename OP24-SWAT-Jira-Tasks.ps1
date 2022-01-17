@@ -1,13 +1,13 @@
 ﻿<#
 Project Name: OP24-SWAT-Jira-Tasks.ps1
       Author: Eren Cihangir
-        Date: 08/24/2021
+        Date: 01/17/2022
      Purpose: Import OP24 SWAT findings from specified app and create default Tasks in the specified JIRA instance/project using API v3.
               In addition, identify and update existing Tasks with latest information.
       Inputs: 
           [required fields]:
                 jiraUser   : username for account in JIRA
-                jiraPw     : password for account in JIRA
+                jiraPw     : API Token generated at https://id.atlassian.com/manage-profile/security/api-tokens for account in JIRA
                 jiraUri    : uri for JIRA instance. 
                    Examples:
                       https://your-domain.atlassian.net/rest/
@@ -25,6 +25,7 @@ Project Name: OP24-SWAT-Jira-Tasks.ps1
                 newStatus  : String description of Jira "New" status for a ticket. Example: "Backlog". Must not be null if doneStatus is defined.
                 doneStatus : String description of Jira "Done" status for a ticket. Example: "Done". Must not be null if newStatus is defined.
                 setLabel   : String description of Jira "label" for a ticket. At this time only a single label is available, and will overwrite each time this run.
+                code       : Add MFA code if needed. This is the token generated via SMS or Authenticator.
 
 
        Usage: OP24-SWAT-Jira-Tasks.ps1 -jiraUri "https://your-domain.atlassian.net/rest/" -jiraUser <youruser> -jiraPw <hidden> -project <yourprojectkey> -op24user <youruser> -op24pw <hidden> -swatApp <appname> -fileImport $false -newStatus <string> -doneStatus <string> -setLabel <string>
@@ -42,6 +43,8 @@ Project Name: OP24-SWAT-Jira-Tasks.ps1
        07/29/21: Updated documentation
        08/24/21: Added logfile name to include SWAT App, output logfile path and name to log
        08/26/21: Removed "setStatus", will revisit later
+       01/17/22: Updated jiraPw description to reflect API token requirement instead of deprecated Basic Auth
+       01/17/22: Added MFA token support using -code parameter. "code" is the token generated via SMS or Authenticator.
 
 
     Usage Notes: When findings exist in multiple projects, done/new/set status values will only apply based on selected project identifier
@@ -63,7 +66,7 @@ Intended Use: Intended to be ad-hoc updating and inserting of vulnerabilities in
 param (
     [Parameter(Mandatory=$True)][string]$jiraUser,
     [Parameter(Mandatory=$True)][string]$jiraPw,
-    [Parameter(Mandatory=$False)][string]$jiraUri = "https://yourdomain.atlassian.net/rest/",
+    [Parameter(Mandatory=$False)][string]$jiraUri,
     [Parameter(Mandatory=$True)][string]$project,
     [Parameter(Mandatory=$False)][string]$op24user,
     [Parameter(Mandatory=$False)][string]$op24pw,
@@ -73,9 +76,12 @@ param (
     [Parameter(Mandatory=$False)][string]$swatApp,
     [Parameter(Mandatory=$False)][string]$newStatus,
     [Parameter(Mandatory=$False)][string]$doneStatus,
-    [Parameter(Mandatory=$False)][string]$setLabel = $null
+    [Parameter(Mandatory=$False)][string]$setLabel = $null,
+    [Parameter(Mandatory=$False)][string]$code
 
 )
+
+$failresponse
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Add-Type -AssemblyName System.Web
@@ -85,28 +91,43 @@ $PSDefaultParameterValues['Out-File:Encoding'] = 'utf16'
 . ".\OP24-SWAT-Jira-Import.ps1"
 . ".\OP24-SWAT-Jira-Import_2.ps1"
 
+# URI for Outpost24 production SaaS
 $uri = "https://outscan.outpost24.com"
 
-# Initialize strings and start logging
-$datetime = Get-Date -Format yyyy-MM-ddTHH-mm-ss-ff
-$logname = ".\OP24-Jira-$project-$swatApp-$datetime"
+# Logging
+if ($logFile -eq $true) { 
+    # Initialize strings and start logging
+    $datetime = Get-Date -Format yyyy-MM-ddTHH-mm-ss-ff
+    $logname = ".\OP24-Jira-$project-$swatApp-$datetime"
+    Start-Transcript -Path "$logname.log" -Force 
 
-if ($logFile -eq $true) { Start-Transcript -Path "$logname.log" -Force }
+    $pwd = Get-Location
+    $pwd = $pwd.Path.TrimEnd($pwd.Path.Length,1)
+    write-host "Output file located here: $pwd\$logname.log"
+    }
 
-$pwd = Get-Location
-$pwd = $pwd.Path.TrimEnd($pwd.Path.Length,1)
-$logname = "OP24-Jira-$project-$swatApp-$datetime"
-write-host "Output file located here: $pwd\$logname.log"
-
+# Request Jira credentials if not provided
+if ($jiraUser -like $null) {
+        $jiraUser = Read-Host -Prompt 'Please input the Jira Account Username'
+    }
+if ($jiraPw -like $null) {
+        $jiraPw = Read-Host -Prompt 'Please input the Jira API Key'
+    }
+if ($jiraUri -like $null) {
+        $jiraUri = Read-Host -Prompt 'Please input the Jira URI'
+    }
 
 
 # Initialize URI for Jira REST API and log in
 $headers = Get-HttpBasicHeader $jiraUser $jiraPw
-try {$response=(Invoke-RestMethod -uri ($jiraUri +"api/3/issue/createmeta?expand=projects.issuetypes.fields") -Headers $headers -Method GET) }
+try {
+    $response=(Invoke-RestMethod -uri ($jiraUri +"api/3/issue/createmeta?expand=projects.issuetypes.fields") -Headers $headers -Method GET) 
+}
 catch {
     write-host "Jira credentials don't work, please try again."
     $Error[0]
-    break
+    Stop-Transcript
+    exit
 }
 
 
@@ -114,7 +135,9 @@ catch {
 $projectID = findProjectID($project)
 if ($projectID -eq $null) {
     write-host "No project exists with that ID, please try again."
-    break
+    $Error[0]
+    Stop-Transcript
+    exit
 }
 
 
@@ -128,6 +151,7 @@ if ($fileImport -eq $true) {
     # Test if file is accessible
     if (!(Test-Path $importFile)) {
         Write-Host "Failed to import file. Please try again."
+        $Error[0]
         Stop-Transcript
         exit
     }
@@ -135,6 +159,7 @@ if ($fileImport -eq $true) {
     # Test if file is the right type
     if (([System.IO.Path]::GetExtension($importFile)) -notlike ".csv") {
         Write-Host "Wrong file type. Please try again with a CSV file."
+        $Error[0]
         Stop-Transcript
         exit
     }
@@ -155,29 +180,43 @@ else {
 
 
     # Interact with OP24 API
-        $creds = 'username=' + 
-                 ([System.Web.HttpUtility]::UrlEncode([System.Web.HttpUtility]::UrlDecode($op24user))) + 
-                 '&password=' + 
-                 ([System.Web.HttpUtility]::UrlEncode([System.Web.HttpUtility]::UrlDecode($op24pw)))
-        try {
-            $findings = Get-OP24WebFindings -creds $creds -uri "https://outscan.outpost24.com"
+    $creds = 'username=' + 
+                ([System.Web.HttpUtility]::UrlEncode([System.Web.HttpUtility]::UrlDecode($op24user))) + 
+                '&password=' + 
+                ([System.Web.HttpUtility]::UrlEncode([System.Web.HttpUtility]::UrlDecode($op24pw)))
+    if ($code -notlike $null) {
+        $creds = $creds + '&code=' + ([System.Web.HttpUtility]::UrlEncode([System.Web.HttpUtility]::UrlDecode($code)))
+    }
+
+    try {
+        # Log in to get a token
+        $response = curl -uri ($uri+'/opi/rest/auth/login') -Method post -Body $creds
+        
+        if ($response.content.contains("TOTP")) {
+            write-host "Please provide the MFA Code/token: "
+            $code = read-host -Prompt 'Code'
+            $creds = $creds + '&code=' + ([System.Web.HttpUtility]::UrlEncode([System.Web.HttpUtility]::UrlDecode($code)))
+            $response = curl -uri ($uri+'/opi/rest/auth/login') -Method post -Body $creds
         }
-        catch {
-            write-host "Credentials for OP24 don't work, please try again."
-            break
-        }
+
+        $token = $response.Content
+    }
+    catch {
+        write-host "Credentials for OutPost24 don't work, please try again."
+        $Error[0]
+        Stop-Transcript
+        exit
+    }
 }
+
+# If login successful, grab findings and start working
+$findings = Get-OP24WebFindings -token $token -uri "https://outscan.outpost24.com"
 
 
 # Filter findings to only include SWAT App, if defined
 if ($swatApp -notlike "") {
     $findings = $findings | where {$_.swatAppName -like $swatApp}
 }
-
-
-# Log in to get a token
-$response = curl -uri ($uri+'/opi/rest/auth/login') -Method post -Body $creds
-$token = $response.Content
 
 
 # Finally loop over each finding to add in a field for the associated URLs
@@ -235,7 +274,12 @@ foreach ($finding in $findings) {
             elseif ($finding.fixed -like "True") {
                 update_issue_transition -transitionID $doneStatusID -issueID $result.id
             }
-            else {write-host "Something went wrong with issue: " + $result.id}
+            else {
+                write-host "Something went wrong with issue: " + $result.id
+                $Error[0]
+                Stop-Transcript
+                exit
+            }
 
         }
 
