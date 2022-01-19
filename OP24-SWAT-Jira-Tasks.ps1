@@ -20,7 +20,7 @@ Project Name: OP24-SWAT-Jira-Tasks.ps1
               
           [optional fields]:
                 fileImport : [bool] Flag to enable importing from local CSV file. Default is $False
-                logFile    : [bool] Flag to enable logging and exporting of Findings to CSV file. Default is $False
+                logFile    : [switch] Flag to enable logging and exporting of Findings to CSV file. Default is $False
                 swatApp    : name of SWAT application to filter for
                 newStatus  : String description of Jira "New" status for a ticket. Example: "Backlog". Must not be null if doneStatus is defined.
                 doneStatus : String description of Jira "Done" status for a ticket. Example: "Done". Must not be null if newStatus is defined.
@@ -45,6 +45,7 @@ Project Name: OP24-SWAT-Jira-Tasks.ps1
        08/26/21: Removed "setStatus", will revisit later
        01/17/22: Updated jiraPw description to reflect API token requirement instead of deprecated Basic Auth
        01/17/22: Added MFA token support using -code parameter. "code" is the token generated via SMS or Authenticator.
+       01/18/22: Added progress counter, additional logging, and secure password input
 
 
     Usage Notes: When findings exist in multiple projects, done/new/set status values will only apply based on selected project identifier
@@ -64,15 +65,15 @@ Intended Use: Intended to be ad-hoc updating and inserting of vulnerabilities in
 #>
 
 param (
-    [Parameter(Mandatory=$True)][string]$jiraUser,
-    [Parameter(Mandatory=$True)][string]$jiraPw,
+    [Parameter(Mandatory=$False)][string]$jiraUser,
+    [Parameter(Mandatory=$False)][string]$jiraPw,
     [Parameter(Mandatory=$False)][string]$jiraUri,
-    [Parameter(Mandatory=$True)][string]$project,
+    [Parameter(Mandatory=$False)][string]$project,
     [Parameter(Mandatory=$False)][string]$op24user,
     [Parameter(Mandatory=$False)][string]$op24pw,
-    [Parameter(Mandatory=$False)][bool]$testRun = $False,
+    [Parameter(Mandatory=$False)][bool]$testRun = $false,
     [Parameter(Mandatory=$False)][bool]$fileImport,
-    [Parameter(Mandatory=$False)][bool]$logFile = $False,
+    [Parameter(Mandatory=$False)][switch]$logFile = $false,
     [Parameter(Mandatory=$False)][string]$swatApp,
     [Parameter(Mandatory=$False)][string]$newStatus,
     [Parameter(Mandatory=$False)][string]$doneStatus,
@@ -98,7 +99,7 @@ $uri = "https://outscan.outpost24.com"
 if ($logFile -eq $true) { 
     # Initialize strings and start logging
     $datetime = Get-Date -Format yyyy-MM-ddTHH-mm-ss-ff
-    $logname = ".\OP24-Jira-$project-$swatApp-$datetime"
+    $logname = ".\OP24-Jira-$project-$datetime"
     Start-Transcript -Path "$logname.log" -Force 
 
     $pwd = Get-Location
@@ -114,8 +115,12 @@ if ($jiraPw -like $null) {
         $jiraPw = Read-Host -Prompt 'Please input the Jira API Key'
     }
 if ($jiraUri -like $null) {
-        $jiraUri = Read-Host -Prompt 'Please input the Jira URI'
+        $jiraUri = Read-Host -Prompt 'Please input the Jira URI (like https://yourdomain.atlassian.net/rest/)'
     }
+if ($project -like $null) {
+        $project = Read-Host -Prompt 'Please input the Jira Project ID'
+    }
+
 
 
 # Initialize URI for Jira REST API and log in
@@ -175,9 +180,9 @@ else {
         $op24user = Read-Host -Prompt 'Please input the Outpost24 Username'
     }
     if ($op24pw -like $null) {
-        $op24pw = Read-Host -Prompt 'Please input the Outpost24 Password/Key'
+        $secureop24pw = Read-Host -Prompt  'Please input the Outpost24 Password/Key' -AsSecureString
+        $op24pw = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureop24pw))
     }
-
 
     # Interact with OP24 API
     $creds = 'username=' + 
@@ -190,13 +195,13 @@ else {
 
     try {
         # Log in to get a token
-        $response = curl -uri ($uri+'/opi/rest/auth/login') -Method post -Body $creds
+        $response = Invoke-WebRequest -uri ($uri+'/opi/rest/auth/login') -Method post -Body $creds
         
         if ($response.content.contains("TOTP")) {
             write-host "Please provide the MFA Code/token: "
             $code = read-host -Prompt 'Code'
             $creds = $creds + '&code=' + ([System.Web.HttpUtility]::UrlEncode([System.Web.HttpUtility]::UrlDecode($code)))
-            $response = curl -uri ($uri+'/opi/rest/auth/login') -Method post -Body $creds
+            $response = Invoke-WebRequest -uri ($uri+'/opi/rest/auth/login') -Method post -Body $creds
         }
 
         $token = $response.Content
@@ -210,6 +215,7 @@ else {
 }
 
 # If login successful, grab findings and start working
+write-host "Getting SWAT Findings from Outpost24..."
 $findings = Get-OP24WebFindings -token $token -uri "https://outscan.outpost24.com"
 
 
@@ -220,12 +226,14 @@ if ($swatApp -notlike "") {
 
 
 # Finally loop over each finding to add in a field for the associated URLs
+write-host "Processing findings..."
 foreach ($finding in $findings) {
     # Retrieve the first URL returned from this and add it as a property to the finding
     $URLs = get_SWAT_URLs -token $token -findingID $finding.id
     $finding.description = "\nAffected URL: \n" + $URLs[0].url + '\n\n' + $finding.description
 }
 
+$i = 0
 
 # Loop over OP24 findings, and for each one attempt to update the record in Jira
 foreach ($finding in $findings) {
@@ -261,7 +269,7 @@ foreach ($finding in $findings) {
 
             
             # Also update this item to reflect the current status if applicable
-            if ($newStatusID -like $null -or $doneStatusID -like $null) {
+            if ($newStatusID -like $null -or $doneStatusID -like $null -and $newStatus -notlike $null -or $doneStatus -notlike $null) {
                 write-host "Status Not Updated: " -ForegroundColor Magenta -NoNewline; Write-Host '('$finding.id')' "does not have a matching workflow status."
                 continue
             }
@@ -321,6 +329,8 @@ foreach ($finding in $findings) {
             }
             else {write-host "Something went wrong with issue: " + $result.id}
     }
+    $i++
+    Write-Progress -activity "Going through list of findings..." -status "Finding: $i of $($findings.Count)" -percentComplete (($i / $findings.Count)  * 100)
 }
 
 try {Stop-Transcript} catch {Write-Host "No transcript to close."}

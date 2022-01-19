@@ -54,7 +54,7 @@ function Get-HttpBasicHeader([string]$username, [string]$password, $Headers = @{
 # Function to obtain all of the regular findings from Outpost24 to create issues from
 function Get-OP24WebFindings ([string]$uri, [string]$token) {
     # Start off by logging in (this should be handled separately)
-    $data = curl -uri ($uri + '/opi/rest/webfindings') -Header @{Authorization = "Bearer "+ $token }
+    $data = Invoke-WebRequest -uri ($uri + '/opi/rest/webfindings') -Header @{Authorization = "Bearer "+ $token }
     
     # Convert the data from JSON into powershell object and return it
     $findings = convertfrom-json $data.content
