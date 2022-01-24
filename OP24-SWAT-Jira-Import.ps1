@@ -63,7 +63,7 @@ function Get-OP24WebFindings ([string]$uri, [string]$token) {
 
 
 function get_SWAT_URLs ([string]$token, [int]$findingID) {
-    $data = curl -Uri ($uri + '/opi/rest/webfindings/' + $findingID + '/web-information') -Header @{Authorization = "Bearer "+ $token }
+    $data = Invoke-Webrequest -Uri ($uri + '/opi/rest/webfindings/' + $findingID + '/web-information') -Header @{Authorization = "Bearer "+ $token }
 
     # Convert the data from JSON into powershell object and return it
     $findingURLs = convertfrom-json $data.content
