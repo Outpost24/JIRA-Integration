@@ -1,7 +1,7 @@
 ﻿<#
 Project Name: OP24-SWAT-Jira-Tasks.ps1
       Author: Eren Cihangir
-        Date: 01/17/2022
+        Date: 01/26/2022
      Purpose: Import OP24 SWAT findings from specified app and create default Tasks in the specified JIRA instance/project using API v3.
               In addition, identify and update existing Tasks with latest information.
       Inputs: 
@@ -46,6 +46,7 @@ Project Name: OP24-SWAT-Jira-Tasks.ps1
        01/17/22: Updated jiraPw description to reflect API token requirement instead of deprecated Basic Auth
        01/17/22: Added MFA token support using -code parameter. "code" is the token generated via SMS or Authenticator.
        01/18/22: Added progress counter, additional logging, and secure password input
+       01/26/22: Fixed some logic errors with transition IDs when creating/updating tickets. Added support for SWAT App name to identify SWAT Instances
 
 
     Usage Notes: When findings exist in multiple projects, done/new/set status values will only apply based on selected project identifier
@@ -81,8 +82,6 @@ param (
     [Parameter(Mandatory=$False)][string]$code
 
 )
-
-$failresponse
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Add-Type -AssemblyName System.Web
@@ -221,7 +220,46 @@ $findings = Get-OP24WebFindings -token $token -uri "https://outscan.outpost24.co
 
 # Filter findings to only include SWAT App, if defined
 if ($swatApp -notlike "") {
-    $findings = $findings | where {$_.swatAppName -like $swatApp}
+    #Deprecated solution
+    #$findings = $findings | where {$_.swatAppName -like $swatApp}
+
+    # Define array for SWAT Schedules and variable for final swatAppID
+    $swatSchedules = @()
+    $swatAppID
+
+    # Loop though all findings to gather SWAT schedule information
+    $swatIDs = $findings | Select-Object swatAppID -Unique
+    write-host "LIST OF SWAT IDs": $swatIDs
+    foreach ($swatID in $swatIDs) {
+        $data = Invoke-WebRequest -uri ($uri + '/opi/rest/swat-schedules/' + $swatID.swatAppID) -Header @{Authorization = "Bearer "+ $token }
+        # Convert the data from JSON into powershell object and return it
+        $swatSchedule = convertfrom-json $data.content
+        $swatSchedules += $swatSchedule
+    }
+
+    write-host "COUNT OF SWAT SCHEDULES FOUND": $swatSchedules.count
+
+    # Now that we have all of the SWAT Schedules within the account, loop through them and find the first swatScheduleID with a name like the one provided.
+    # If we find one, set the final SWAT App ID to filter findings on, and then gather all of the findings for that SWAT App/Instance
+    foreach ($swatSchedule in $swatSchedules) {
+        if ($swatSchedule.name -like $swatApp) {
+            write-host "HERE IS THE SWAT APP ID" $swatSchedule.id
+            $swatAppID = $swatSchedule.id
+            break
+        }
+    }
+
+    if ($swatAppID -notlike $null) {
+        # Call webfindings with the filter
+        $data = Invoke-WebRequest -uri ($uri + "/opi/rest/webfindings?filter=%5B%7B%22field%22%3A%22scheduleId%22%2C%22value%22%3A" + $swatAppID) -Header @{Authorization = "Bearer "+ $token }
+    
+        # Convert the data from JSON into powershell object and return it
+        $findings = convertfrom-json $data.content
+        }
+    else {
+        write-host "No SWAT app or instance was found with that name. Please try again."
+        exit
+    }
 }
 
 
@@ -269,8 +307,8 @@ foreach ($finding in $findings) {
 
             
             # Also update this item to reflect the current status if applicable
-            if ($newStatusID -like $null -or $doneStatusID -like $null -and $newStatus -notlike $null -or $doneStatus -notlike $null) {
-                write-host "Status Not Updated: " -ForegroundColor Magenta -NoNewline; Write-Host '('$finding.id')' "does not have a matching workflow status."
+            if (($newStatusID -like $null -or $doneStatusID -like $null) -and ($newStatus -notlike $null -or $doneStatus -notlike $null)) {
+                write-host "Status Not Updated: " -ForegroundColor Magenta -NoNewline; Write-Host '('$finding.id')' "does not have a matching workflow status, skipping ticket status..."
                 continue
             }
 
@@ -279,7 +317,8 @@ foreach ($finding in $findings) {
                 # do nothing
 
             }
-            elseif ($finding.fixed -like "True") {
+            # If we've made it here, then the finding must have been fixed but we should only attempt to update the transition if a doneStatus was found.
+            elseif (($finding.fixed -like "True") -and ($doneStatusID -notlike $null)){
                 update_issue_transition -transitionID $doneStatusID -issueID $result.id
             }
             else {
@@ -313,21 +352,39 @@ foreach ($finding in $findings) {
         write-host "Ticket ID"$newTicket -ForegroundColor Green -NoNewline;  write-host " has been created in Jira under project $project."
 
         # For each new record, identify the transition IDs for workflow (new/done/etc)
-        $newStatusID = (get_transitionID -issueID $newTicket -ticketStatus $newStatus)
+        try { 
+            $newStatusID = (get_transitionID -issueID $newTicket -ticketStatus $newStatus)
+            }
+        catch {
+            # No transition ID was found
+            $newStatusID = $null 
+            }
+        
+        try {
         $doneStatusID = (get_transitionID -issueID $newTicket -ticketStatus $doneStatus)
+            }
+        catch { 
+            # No transition ID was found
+            $doneStatusID = $null 
+            }
 
-        if ($newStatusID -like $null -or $doneStatusID -like $null) {
-                write-host "Ticket Status Update Error: " -ForegroundColor Magenta -NoNewline; Write-Host '('$finding.id')' $finding.name "does not have a matching workflow status, skipping..."
+
+        # If either of the Transitions were entered wrong, notify the user
+        if (($newStatusID -like $null -or $doneStatusID -like $null) -and ($newStatus -notlike $null -or $doneStatus -notlike $null)) {
+                write-host "Ticket Status Update Error: " -ForegroundColor Magenta -NoNewline; Write-Host '('$finding.id')' $finding.name "does not have a matching workflow status, skipping ticket status..."
                 continue
             }
 
-        if ($finding.fixed -like "False") {
+        # If they've provided new & done status IDs, and they were found, then update the newly-created tickets to reflect those statuses.
+        if (($finding.fixed -like "False") -and ($newStatusID -notlike $null)) {
                 update_issue_transition -transitionID $newStatusID -issueID $newTicket
             }
-            elseif ($finding.fixed -like "True") {
+        elseif (($finding.fixed -like "True") -and ($doneStatusID -notlike $null)) {
                 update_issue_transition -transitionID $doneStatusID -issueID $newTicket
             }
-            else {write-host "Something went wrong with issue: " + $result.id}
+        else {
+            # Do nothing
+            }
     }
     $i++
     Write-Progress -activity "Going through list of findings..." -status "Finding: $i of $($findings.Count)" -percentComplete (($i / $findings.Count)  * 100)
