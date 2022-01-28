@@ -217,7 +217,6 @@ else {
 write-host "Getting SWAT Findings from Outpost24..."
 $findings = Get-OP24WebFindings -token $token -uri "https://outscan.outpost24.com"
 
-
 # Filter findings to only include SWAT App, if defined
 if ($swatApp -notlike "") {
     #Deprecated solution
@@ -225,11 +224,12 @@ if ($swatApp -notlike "") {
 
     # Define array for SWAT Schedules and variable for final swatAppID
     $swatSchedules = @()
-    $swatAppID
+    $searchScheduleID
+    $swatScheduleName
+
 
     # Loop though all findings to gather SWAT schedule information
-    $swatIDs = $findings | Select-Object swatAppID -Unique
-    write-host "LIST OF SWAT IDs": $swatIDs
+    $swatIDs = $findings | Select-Object scheduleID -Unique
     foreach ($swatID in $swatIDs) {
         $data = Invoke-WebRequest -uri ($uri + '/opi/rest/swat-schedules/' + $swatID.swatAppID) -Header @{Authorization = "Bearer "+ $token }
         # Convert the data from JSON into powershell object and return it
@@ -237,24 +237,21 @@ if ($swatApp -notlike "") {
         $swatSchedules += $swatSchedule
     }
 
-    write-host "COUNT OF SWAT SCHEDULES FOUND": $swatSchedules.count
-
     # Now that we have all of the SWAT Schedules within the account, loop through them and find the first swatScheduleID with a name like the one provided.
     # If we find one, set the final SWAT App ID to filter findings on, and then gather all of the findings for that SWAT App/Instance
     foreach ($swatSchedule in $swatSchedules) {
         if ($swatSchedule.name -like $swatApp) {
-            write-host "HERE IS THE SWAT APP ID" $swatSchedule.id
-            $swatAppID = $swatSchedule.id
+            $swatScheduleName = $swatSchedule.name
+            $searchScheduleID = $swatSchedule.id
             break
         }
     }
 
-    if ($swatAppID -notlike $null) {
-        # Call webfindings with the filter
-        $data = Invoke-WebRequest -uri ($uri + "/opi/rest/webfindings?filter=%5B%7B%22field%22%3A%22scheduleId%22%2C%22value%22%3A" + $swatAppID) -Header @{Authorization = "Bearer "+ $token }
-    
-        # Convert the data from JSON into powershell object and return it
-        $findings = convertfrom-json $data.content
+    if ($searchScheduleID -notlike $null) {
+        
+        # Get findings with scheduleID that matches the one identified ($searchScheduleID)
+        $filteredFindings = ($findings  | where {$_.scheduleID -like $searchScheduleID})
+        $findings = $filteredFindings
         }
     else {
         write-host "No SWAT app or instance was found with that name. Please try again."
@@ -269,6 +266,7 @@ foreach ($finding in $findings) {
     # Retrieve the first URL returned from this and add it as a property to the finding
     $URLs = get_SWAT_URLs -token $token -findingID $finding.id
     $finding.description = "\nAffected URL: \n" + $URLs[0].url + '\n\n' + $finding.description
+    $finding.swatAppName = $swatScheduleName
 }
 
 $i = 0
@@ -322,10 +320,8 @@ foreach ($finding in $findings) {
                 update_issue_transition -transitionID $doneStatusID -issueID $result.id
             }
             else {
-                write-host "Something went wrong with issue: " + $result.id
-                $Error[0]
-                Stop-Transcript
-                exit
+                # Finding is fixed, but they didn't provide a doneStatus
+                # do nothing
             }
 
         }
@@ -348,6 +344,11 @@ foreach ($finding in $findings) {
             continue
         }
         
+        # Check for and add label if defined in script call
+            if ($setLabel -notlike $null) {
+                add_issue_label $newTicket $setLabel
+            }
+
         write-Host "New: " -ForegroundColor Green -NoNewline; Write-Host '('$finding.id')' $finding.name  "is new."
         write-host "Ticket ID"$newTicket -ForegroundColor Green -NoNewline;  write-host " has been created in Jira under project $project."
 
@@ -383,6 +384,7 @@ foreach ($finding in $findings) {
                 update_issue_transition -transitionID $doneStatusID -issueID $newTicket
             }
         else {
+            # Finding is fixed, but they didn't provide a doneStatus
             # Do nothing
             }
     }
